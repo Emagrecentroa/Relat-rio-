@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relatório Diário — Emagrecentro</title>
+<style>
+  :root {
+    --rose-gold: #e8b4b8;
+    --rose-gold-dark: #c98f93;
+    --bg: #fdf8f8;
+    --text: #3a2c2d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+    max-width: 480px;
+    margin-inline: auto;
+  }
+  header { text-align: center; padding: 20px 0 12px; }
+  header h1 { font-size: 1.3rem; margin: 0; color: var(--rose-gold-dark); }
+  header p { margin: 4px 0 0; font-size: 0.85rem; opacity: 0.7; text-transform: capitalize; }
+  .card {
+    background: white;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
+  select, textarea {
+    width: 100%;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #ead4d5;
+    font-size: 1rem;
+    font-family: inherit;
+    margin-bottom: 12px;
+    resize: vertical;
+  }
+  textarea { min-height: 80px; }
+  button {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 12px;
+    background: var(--rose-gold-dark);
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:active { opacity: 0.85; }
+  button:disabled { opacity: 0.5; }
+  .entry {
+    border-left: 3px solid var(--rose-gold);
+    padding: 8px 36px 8px 12px;
+    margin-bottom: 8px;
+    background: #fffaf9;
+    border-radius: 0 8px 8px 0;
+    position: relative;
+  }
+  .entry .hora { font-size: 0.72rem; opacity: 0.6; display: block; margin-bottom: 2px; }
+  .entry .tipo {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: var(--rose-gold);
+    color: white;
+    margin-bottom: 4px;
+  }
+  .entry .remover {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: none;
+    border: none;
+    color: #b06c70;
+    font-size: 0.85rem;
+    width: auto;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .empty { text-align: center; opacity: 0.5; font-size: 0.85rem; padding: 20px 0; }
+  .status { text-align: center; font-size: 0.8rem; margin-top: 8px; min-height: 18px; }
+  footer { text-align: center; font-size: 0.7rem; opacity: 0.4; padding: 8px 0 24px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Relatório Diário</h1>
+    <p id="dataAtual">carregando data...</p>
+  </header>
+
+  <div class="card">
+    <label for="tipo">Tipo</label>
+    <select id="tipo">
+      <option value="Paciente">Paciente</option>
+      <option value="Equipe">Equipe</option>
+      <option value="Outro">Outro</option>
+    </select>
+
+    <label for="texto">O que aconteceu?</label>
+    <textarea id="texto" placeholder="Ex: Paciente relatou reação alérgica ao..."></textarea>
+
+    <button id="btnAdicionar">Adicionar ao relatório de hoje</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <label>Lançamentos de hoje</label>
+    <div id="listaEntradas"><p class="empty">Nada registrado ainda hoje.</p></div>
+  </div>
+
+  <footer>Envio automático para a gerência às 19h</footer>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+    import {
+      getFirestore, doc, setDoc, arrayUnion, arrayRemove, onSnapshot
+    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+    // ⚠️ COLE AQUI a configuração do MESMO projeto Firebase do app de Aniversariantes.
+    // Onde achar: console.firebase.google.com > abra o projeto do Aniversariantes >
+    // ícone de engrenagem (Configurações do projeto) > role até "Seus apps" >
+    // clique no app da web > "SDK setup and configuration" > copie o objeto abaixo.
+    const firebaseConfig = {
+      apiKey: "COLE_AQUI",
+      authDomain: "COLE_AQUI",
+      projectId: "COLE_AQUI",
+      storageBucket: "COLE_AQUI",
+      messagingSenderId: "COLE_AQUI",
+      appId: "COLE_AQUI"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Usamos uma coleção separada ("relatorios_diarios") no MESMO projeto,
+    // então não se mistura com os dados de aniversariantes.
+    const COLECAO = "relatorios_diarios";
+
+    function hojeStr() {
+      const partes = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit"
+      }).formatToParts(new Date());
+      const map = Object.fromEntries(partes.map(p => [p.type, p.value]));
+      return `${map.year}-${map.month}-${map.day}`;
+    }
+
+    const hoje = hojeStr();
+    document.getElementById("dataAtual").textContent =
+      new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Sao_Paulo" });
+
+    const docRef = doc(db, COLECAO, hoje);
+
+    onSnapshot(docRef, (snap) => {
+      const lista = document.getElementById("listaEntradas");
+      const entradas = snap.exists() ? (snap.data().entradas || []) : [];
+      if (entradas.length === 0) {
+        lista.innerHTML = '<p class="empty">Nada registrado ainda hoje.</p>';
+        return;
+      }
+      const ordenadas = entradas.slice().sort((a, b) => a.hora.localeCompare(b.hora));
+      lista.innerHTML = ordenadas.map((e) => `
+        <div class="entry">
+          <button class="remover" data-idx="${entradas.indexOf(e)}">remover</button>
+          <span class="hora">${e.hora}</span>
+          <span class="tipo">${e.tipo}</span>
+          <div>${e.texto.replace(/</g, "&lt;")}</div>
+        </div>
+      `).join("");
+
+      lista.querySelectorAll(".remover").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const idx = Number(btn.dataset.idx);
+          const alvo = entradas[idx];
+          await setDoc(docRef, { entradas: arrayRemove(alvo) }, { merge: true });
+        });
+      });
+    });
+
+    document.getElementById("btnAdicionar").addEventListener("click", async () => {
+      const texto = document.getElementById("texto").value.trim();
+      const tipo = document.getElementById("tipo").value;
+      const status = document.getElementById("status");
+      if (!texto) {
+        status.textContent = "Escreve alguma coisa antes 🙂";
+        return;
+      }
+      const btn = document.getElementById("btnAdicionar");
+      btn.disabled = true;
+      status.textContent = "Salvando...";
+      const agora = new Intl.DateTimeFormat("pt-BR", {
+        timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit"
+      }).format(new Date());
+      try {
+        await setDoc(docRef, {
+          data: hoje,
+          entradas: arrayUnion({ hora: agora, tipo, texto })
+        }, { merge: true });
+        document.getElementById("texto").value = "";
+        status.textContent = "Adicionado ✅";
+        setTimeout(() => (status.textContent = ""), 2000);
+      } catch (err) {
+        status.textContent = "Erro ao salvar: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
