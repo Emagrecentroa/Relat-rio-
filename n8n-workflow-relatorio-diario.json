@@ -1,5 +1,5 @@
 {
-  "name": "[PROD][RELATORIO-DIARIO-EMAGRECENTRO][V1]",
+  "name": "[PROD][RELATORIO-DIARIO-EMAGRECENTRO][V2]",
   "nodes": [
     {
       "parameters": {
@@ -16,7 +16,10 @@
       "name": "Todo dia às 19h",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -26,11 +29,14 @@
       "name": "Calcular data de hoje",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 0]
+      "position": [
+        220,
+        0
+      ]
     },
     {
       "parameters": {
-        "url": "=https://firestore.googleapis.com/v1/projects/COLE_SEU_PROJECT_ID/databases/(default)/documents/relatorios_diarios/{{ $json.hoje }}",
+        "url": "=https://firestore.googleapis.com/v1/projects/COLE_SEU_PROJECT_ID/databases/(default)/documents/relatorios_diarios/{{ $json.hoje }}/entradas",
         "options": {
           "response": {
             "response": {
@@ -40,20 +46,26 @@
         }
       },
       "id": "buscar-relatorio",
-      "name": "Buscar relatório do dia (Firestore)",
+      "name": "Buscar lançamentos do dia (Firestore)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [440, 0]
+      "position": [
+        440,
+        0
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const body = $input.first().json;\nconst fields = body.fields;\n\nif (!fields || !fields.entradas || !fields.entradas.arrayValue || !fields.entradas.arrayValue.values) {\n  return [{ json: { temEntradas: false, mensagem: null } }];\n}\n\nconst entradas = fields.entradas.arrayValue.values.map((v) => {\n  const m = v.mapValue.fields;\n  return {\n    hora: m.hora.stringValue,\n    tipo: m.tipo.stringValue,\n    texto: m.texto.stringValue\n  };\n}).sort((a, b) => a.hora.localeCompare(b.hora));\n\nconst dataFormatada = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nlet msg = `*Relatório Diário — Emagrecentro*\\n_${dataFormatada}_\\n\\n`;\nfor (const e of entradas) {\n  msg += `🔸 *${e.hora}* [${e.tipo}]\\n${e.texto}\\n\\n`;\n}\nmsg += `Total de registros: ${entradas.length}`;\n\nreturn [{ json: { temEntradas: true, mensagem: msg } }];"
+        "jsCode": "const body = $input.first().json;\nconst docs = body.documents || [];\n\nif (docs.length === 0) {\n  return [{ json: { temEntradas: false, mensagem: null, fotos: [] } }];\n}\n\nconst entradas = docs.map((d) => {\n  const f = d.fields || {};\n  return {\n    hora: f.hora ? f.hora.stringValue : '',\n    tipo: f.tipo ? f.tipo.stringValue : '',\n    texto: f.texto ? f.texto.stringValue : '',\n    fotoUrl: f.fotoUrl && f.fotoUrl.stringValue ? f.fotoUrl.stringValue : null\n  };\n}).sort((a, b) => a.hora.localeCompare(b.hora));\n\nconst dataFormatada = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nlet msg = `*Relatório Diário — Emagrecentro*\\n_${dataFormatada}_\\n\\n`;\nfor (const e of entradas) {\n  msg += `🔸 *${e.hora}* [${e.tipo}]\\n${e.texto}`;\n  if (e.fotoUrl) msg += `\\n📷 foto em anexo logo abaixo`;\n  msg += `\\n\\n`;\n}\nmsg += `Total de registros: ${entradas.length}`;\n\nconst fotos = entradas\n  .filter((e) => e.fotoUrl)\n  .map((e) => ({ url: e.fotoUrl, legenda: `${e.hora} — ${e.tipo}: ${e.texto}` }));\n\nreturn [{ json: { temEntradas: true, mensagem: msg, fotos } }];"
       },
       "id": "montar-mensagem",
       "name": "Montar mensagem",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 0]
+      "position": [
+        660,
+        0
+      ]
     },
     {
       "parameters": {
@@ -80,7 +92,10 @@
       "name": "Teve algo pra reportar?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [880, 0]
+      "position": [
+        880,
+        0
+      ]
     },
     {
       "parameters": {
@@ -99,30 +114,132 @@
         "specifyBody": "json",
         "jsonBody": "={{ { \"number\": \"5522981598727\", \"text\": $json.mensagem } }}"
       },
-      "id": "enviar-whatsapp",
-      "name": "Enviar WhatsApp (Evolution API)",
+      "id": "enviar-resumo",
+      "name": "Enviar resumo (texto)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1100, -80]
+      "position": [
+        1100,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fotos = $('Montar mensagem').first().json.fotos || [];\nreturn fotos.map((f) => ({ json: f }));"
+      },
+      "id": "extrair-fotos",
+      "name": "Separar uma foto por vez",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://evo.assistentemoderno.com.br/message/sendMedia/moderno.club",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "COLE_SUA_EVOLUTION_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"number\": \"5522981598727\", \"mediatype\": \"image\", \"media\": $json.url, \"caption\": $json.legenda } }}"
+      },
+      "id": "enviar-fotos",
+      "name": "Enviar cada foto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -80
+      ]
     }
   ],
   "connections": {
     "Todo dia às 19h": {
-      "main": [[{ "node": "Calcular data de hoje", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Calcular data de hoje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Calcular data de hoje": {
-      "main": [[{ "node": "Buscar relatório do dia (Firestore)", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Buscar lançamentos do dia (Firestore)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Buscar relatório do dia (Firestore)": {
-      "main": [[{ "node": "Montar mensagem", "type": "main", "index": 0 }]]
+    "Buscar lançamentos do dia (Firestore)": {
+      "main": [
+        [
+          {
+            "node": "Montar mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Montar mensagem": {
-      "main": [[{ "node": "Teve algo pra reportar?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Teve algo pra reportar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Teve algo pra reportar?": {
       "main": [
-        [{ "node": "Enviar WhatsApp (Evolution API)", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Enviar resumo (texto)",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
+      ]
+    },
+    "Enviar resumo (texto)": {
+      "main": [
+        [
+          {
+            "node": "Separar uma foto por vez",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar uma foto por vez": {
+      "main": [
+        [
+          {
+            "node": "Enviar cada foto",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
