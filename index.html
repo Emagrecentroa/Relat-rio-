@@ -32,6 +32,34 @@
     margin-bottom: 16px;
   }
   .card.editando { outline: 2px solid var(--rose-gold-dark); }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .tab {
+    flex: 1;
+    padding: 12px 8px;
+    border-radius: 12px;
+    background: white;
+    color: var(--rose-gold-dark);
+    border: 1px solid #ead4d5;
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+  }
+  .tab.ativa {
+    background: var(--rose-gold-dark);
+    color: white;
+    border-color: var(--rose-gold-dark);
+  }
+  .tab-legenda {
+    text-align: center;
+    font-size: 0.75rem;
+    opacity: 0.6;
+    margin: -10px 0 16px;
+  }
   label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; }
   select, textarea, input[type="file"] {
     width: 100%;
@@ -118,6 +146,17 @@
     color: white;
     margin-bottom: 4px;
   }
+  .entry .sup {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+    color: white;
+    margin-bottom: 4px;
+    margin-left: 4px;
+  }
+  .sup-nathalia { background: #c98f93; }
+  .sup-suelem { background: #7f9c8a; }
   .entry .acoes { display: flex; gap: 10px; flex-shrink: 0; }
   .entry .acoes button {
     background: none;
@@ -149,6 +188,12 @@
     <h1>Relatório Diário</h1>
     <p id="dataAtual">carregando data...</p>
   </header>
+
+  <div class="tabs" id="tabsSupervisora">
+    <button type="button" class="tab" data-sup="Nathalia">Supervisora Nathalia</button>
+    <button type="button" class="tab" data-sup="Suelem">Supervisora Suelem</button>
+  </div>
+  <p class="tab-legenda">Escolha quem está lançando agora</p>
 
   <div class="card" id="cardFormulario">
     <div class="aviso-editando" id="avisoEditando">✏️ Editando um lançamento já salvo.</div>
@@ -199,12 +244,12 @@
     // ícone de engrenagem (Configurações do projeto) > role até "Seus apps" >
     // clique no app da web > "SDK setup and configuration" > copie o objeto abaixo.
     const firebaseConfig = {
-      apiKey: "COLE_AQUI",
-      authDomain: "COLE_AQUI",
-      projectId: "COLE_AQUI",
-      storageBucket: "COLE_AQUI",
-      messagingSenderId: "COLE_AQUI",
-      appId: "COLE_AQUI"
+      apiKey: "AIzaSyALE3JAz2Spit5YLToxo-H07xEf4lOHDNs",
+      authDomain: "aniversariantes-emagrecentro.firebaseapp.com",
+      projectId: "aniversariantes-emagrecentro",
+      storageBucket: "aniversariantes-emagrecentro.firebasestorage.app",
+      messagingSenderId: "887474375015",
+      appId: "1:887474375015:web:178094abc7f354581947c2"
     };
 
     const app = initializeApp(firebaseConfig);
@@ -236,6 +281,31 @@
       new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Sao_Paulo" });
 
     const entradasRef = collection(db, COLECAO_RAIZ, hoje, "entradas");
+
+    // ---- Quem está lançando agora (Nathalia ou Suelem) ----
+    // Fica salvo no aparelho (localStorage), então cada celular já abre
+    // na aba de quem usa ele — mas dá pra trocar a qualquer momento.
+    const CHAVE_SUPERVISORA = "relatorio_supervisora_atual";
+    let supervisoraAtual = localStorage.getItem(CHAVE_SUPERVISORA) || "Nathalia";
+
+    function slug(nome) {
+      return (nome || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    }
+
+    const elTabs = document.querySelectorAll("#tabsSupervisora .tab");
+    function aplicarAbaAtiva() {
+      elTabs.forEach((btn) => {
+        btn.classList.toggle("ativa", btn.dataset.sup === supervisoraAtual);
+      });
+    }
+    elTabs.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        supervisoraAtual = btn.dataset.sup;
+        localStorage.setItem(CHAVE_SUPERVISORA, supervisoraAtual);
+        aplicarAbaAtiva();
+      });
+    });
+    aplicarAbaAtiva();
 
     // ---- Estado do formulário (novo lançamento OU edição de um existente) ----
     let editandoId = null;       // id do documento sendo editado, ou null = criando novo
@@ -325,6 +395,7 @@
       } else {
         elPreview.classList.remove("mostrar");
       }
+      elAvisoEditando.textContent = `✏️ Editando lançamento de ${entrada.supervisora || "—"}.`;
       elAvisoEditando.classList.add("mostrar");
       elCard.classList.add("editando");
       elBtnAdicionar.textContent = "Salvar edição";
@@ -351,6 +422,7 @@
             <div>
               <span class="hora">${e.hora}</span>
               <span class="tipo">${e.tipo}</span>
+              ${e.supervisora ? `<span class="sup sup-${slug(e.supervisora)}">${e.supervisora}</span>` : ""}
             </div>
             <div class="acoes">
               <button class="editar" data-id="${e.id}">editar</button>
@@ -425,6 +497,7 @@
             hora: horaAgora(),
             tipo,
             texto,
+            supervisora: supervisoraAtual,
             fotoUrl: fotoUrl || null,
             fotoStoragePath: fotoStoragePath || null,
             criadoEm: serverTimestamp()

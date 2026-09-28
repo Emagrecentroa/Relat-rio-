@@ -36,7 +36,7 @@
     },
     {
       "parameters": {
-        "url": "=https://firestore.googleapis.com/v1/projects/COLE_SEU_PROJECT_ID/databases/(default)/documents/relatorios_diarios/{{ $json.hoje }}/entradas",
+        "url": "=https://firestore.googleapis.com/v1/projects/aniversariantes-emagrecentro/databases/(default)/documents/relatorios_diarios/{{ $json.hoje }}/entradas",
         "options": {
           "response": {
             "response": {
@@ -56,7 +56,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $input.first().json;\nconst docs = body.documents || [];\n\nif (docs.length === 0) {\n  return [{ json: { temEntradas: false, mensagem: null, fotos: [] } }];\n}\n\nconst entradas = docs.map((d) => {\n  const f = d.fields || {};\n  return {\n    hora: f.hora ? f.hora.stringValue : '',\n    tipo: f.tipo ? f.tipo.stringValue : '',\n    texto: f.texto ? f.texto.stringValue : '',\n    fotoUrl: f.fotoUrl && f.fotoUrl.stringValue ? f.fotoUrl.stringValue : null\n  };\n}).sort((a, b) => a.hora.localeCompare(b.hora));\n\nconst dataFormatada = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nlet msg = `*Relatório Diário — Emagrecentro*\\n_${dataFormatada}_\\n\\n`;\nfor (const e of entradas) {\n  msg += `🔸 *${e.hora}* [${e.tipo}]\\n${e.texto}`;\n  if (e.fotoUrl) msg += `\\n📷 foto em anexo logo abaixo`;\n  msg += `\\n\\n`;\n}\nmsg += `Total de registros: ${entradas.length}`;\n\nconst fotos = entradas\n  .filter((e) => e.fotoUrl)\n  .map((e) => ({ url: e.fotoUrl, legenda: `${e.hora} — ${e.tipo}: ${e.texto}` }));\n\nreturn [{ json: { temEntradas: true, mensagem: msg, fotos } }];"
+        "jsCode": "const body = $input.first().json;\nconst docs = body.documents || [];\n\nif (docs.length === 0) {\n  return [{ json: { temEntradas: false, mensagem: null, fotos: [] } }];\n}\n\nconst entradas = docs.map((d) => {\n  const f = d.fields || {};\n  return {\n    hora: f.hora ? f.hora.stringValue : '',\n    tipo: f.tipo ? f.tipo.stringValue : '',\n    texto: f.texto ? f.texto.stringValue : '',\n    supervisora: f.supervisora ? f.supervisora.stringValue : '',\n    fotoUrl: f.fotoUrl && f.fotoUrl.stringValue ? f.fotoUrl.stringValue : null\n  };\n}).sort((a, b) => a.hora.localeCompare(b.hora));\n\nconst dataFormatada = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nlet msg = `*Relatório Diário — Emagrecentro*\\n_${dataFormatada}_\\n\\n`;\nfor (const e of entradas) {\n  const autor = e.supervisora ? ` — ${e.supervisora}` : '';\n  msg += `🔸 *${e.hora}* [${e.tipo}]${autor}\\n${e.texto}`;\n  if (e.fotoUrl) msg += `\\n📷 foto em anexo logo abaixo`;\n  msg += `\\n\\n`;\n}\nmsg += `Total de registros: ${entradas.length}`;\n\nconst fotos = entradas\n  .filter((e) => e.fotoUrl)\n  .map((e) => ({ url: e.fotoUrl, legenda: `${e.hora} — ${e.tipo} (${e.supervisora}): ${e.texto}` }));\n\nreturn [{ json: { temEntradas: true, mensagem: msg, fotos } }];"
       },
       "id": "montar-mensagem",
       "name": "Montar mensagem",
