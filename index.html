@@ -226,9 +226,10 @@
   <div class="card">
     <label>Lançamentos de hoje</label>
     <div id="listaEntradas"><p class="empty">Nada registrado ainda hoje.</p></div>
+    <button id="btnWhatsapp" class="secundario" style="margin-top:12px;">📤 Enviar resumo no WhatsApp</button>
   </div>
 
-  <footer>Envio automático para a gerência às 19h</footer>
+  <footer>Toque no botão acima pra mandar o resumo de hoje pra gerência</footer>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
@@ -281,6 +282,10 @@
       new Date().toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Sao_Paulo" });
 
     const entradasRef = collection(db, COLECAO_RAIZ, hoje, "entradas");
+
+    // Número da gerente (DDI 55 + DDD + número). Troque aqui se precisar.
+    const NUMERO_GERENTE = "5522981598727";
+    let entradasHoje = []; // sempre com a última lista, pro botão do WhatsApp usar
 
     // ---- Quem está lançando agora (Nathalia ou Suelem) ----
     // Fica salvo no aparelho (localStorage), então cada celular já abre
@@ -409,6 +414,7 @@
       const lista = document.getElementById("listaEntradas");
       const entradas = [];
       snap.forEach((d) => entradas.push({ id: d.id, ...d.data() }));
+      entradasHoje = entradas;
 
       if (entradas.length === 0) {
         lista.innerHTML = '<p class="empty">Nada registrado ainda hoje.</p>';
@@ -512,6 +518,32 @@
       } finally {
         elBtnAdicionar.disabled = false;
       }
+    });
+
+    // ---- Botão "Enviar resumo no WhatsApp" (manual, sem depender do robô do n8n) ----
+    function montarMensagemWhatsApp(entradas) {
+      const ordenadas = entradas.slice().sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+      const dataFormatada = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+      let msg = `*Relatório Diário — Emagrecentro*\n_${dataFormatada}_\n\n`;
+      for (const e of ordenadas) {
+        const autor = e.supervisora ? ` — ${e.supervisora}` : "";
+        msg += `🔸 *${e.hora}* [${e.tipo}]${autor}\n${e.texto}`;
+        if (e.fotoUrl) msg += `\n📷 ${e.fotoUrl}`;
+        msg += `\n\n`;
+      }
+      msg += `Total de registros: ${ordenadas.length}`;
+      return msg;
+    }
+
+    document.getElementById("btnWhatsapp").addEventListener("click", () => {
+      if (entradasHoje.length === 0) {
+        alert("Ainda não tem nenhum lançamento hoje pra mandar.");
+        return;
+      }
+      const mensagem = montarMensagemWhatsApp(entradasHoje);
+      const url = `https://wa.me/${NUMERO_GERENTE}?text=${encodeURIComponent(mensagem)}`;
+      window.open(url, "_blank");
     });
   </script>
 </body>
