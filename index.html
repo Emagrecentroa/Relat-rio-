@@ -201,7 +201,10 @@
     <label for="tipo">Tipo</label>
     <select id="tipo">
       <option value="Paciente">Paciente</option>
-      <option value="Equipe">Equipe</option>
+      <option value="Estética">Estética</option>
+      <option value="Biomédicas e Nutricionistas">Biomédicas e Nutricionistas</option>
+      <option value="Avaliadores">Avaliadores</option>
+      <option value="Recepção">Recepção</option>
       <option value="Outro">Outro</option>
     </select>
 
@@ -209,7 +212,7 @@
     <textarea id="texto" placeholder="Ex: Paciente relatou reação alérgica ao..."></textarea>
 
     <label for="foto">Foto (opcional)</label>
-    <input type="file" id="foto" accept="image/*" capture="environment">
+    <input type="file" id="foto" accept="image/*">
 
     <div class="preview-foto" id="previewFoto">
       <img id="previewFotoImg" alt="Pré-visualização da foto">
@@ -226,7 +229,15 @@
   <div class="card">
     <label>Lançamentos de hoje</label>
     <div id="listaEntradas"><p class="empty">Nada registrado ainda hoje.</p></div>
-    <button id="btnWhatsapp" class="secundario" style="margin-top:12px;">📤 Enviar resumo no WhatsApp</button>
+    <button id="btnWhatsapp" class="secundario" style="margin-top:12px; width:100%;">📤 Enviar resumo no WhatsApp</button>
+  </div>
+
+  <div class="card">
+    <label for="dataHistorico">Relatórios anteriores</label>
+    <input type="date" id="dataHistorico">
+    <button id="btnVerHistorico" class="secundario" style="width:100%;">Ver relatório desse dia</button>
+    <div id="listaHistorico" style="margin-top:12px;"></div>
+    <button id="btnWhatsappHistorico" class="secundario" style="margin-top:12px; width:100%; display:none;">📤 Enviar esse relatório no WhatsApp</button>
   </div>
 
   <footer>Toque no botão acima pra mandar o resumo de hoje pra gerência</footer>
@@ -234,7 +245,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import {
-      getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp
+      getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, getDocs
     } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
     import {
       getStorage, ref, uploadBytes, getDownloadURL, deleteObject
@@ -275,6 +286,30 @@
       return new Intl.DateTimeFormat("pt-BR", {
         timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit"
       }).format(new Date());
+    }
+
+    // Formata uma data "AAAA-MM-DD" (de hoje ou de um dia antigo do histórico)
+    // por extenso, sem cair no dia errado por causa de fuso horário.
+    function formatarDataExibicao(dataStr) {
+      const d = new Date(`${dataStr}T12:00:00`);
+      return d.toLocaleDateString("pt-BR", {
+        weekday: "long", day: "2-digit", month: "long", year: "numeric", timeZone: "America/Sao_Paulo"
+      });
+    }
+
+    // Traduz os erros mais comuns do Firebase Storage pra algo que dá pra agir.
+    function explicarErroStorage(err) {
+      const codigo = err && err.code;
+      if (codigo === "storage/unauthorized") {
+        return "as regras do Storage estão bloqueando o envio — pede pro Leonardo liberar leitura/escrita no Firebase";
+      }
+      if (codigo === "storage/unknown" || codigo === "storage/retry-limit-exceeded") {
+        return "o Storage desse projeto pode não estar ativado no Firebase ainda";
+      }
+      if (codigo === "storage/canceled") {
+        return "o envio foi cancelado";
+      }
+      return (err && err.message) || "erro desconhecido";
     }
 
     const hoje = hojeStr();
@@ -476,28 +511,40 @@
       elBtnAdicionar.disabled = true;
       elStatus.textContent = "Salvando...";
 
-      try {
-        let fotoUrl = fotoRemovida ? null : fotoUrlAtual;
-        let fotoStoragePath = null;
+      // A foto sobe separado do resto: se ela falhar, o texto do lançamento
+      // é salvo do mesmo jeito, só avisando que a foto não entrou.
+      let fotoUrl = fotoRemovida ? null : fotoUrlAtual;
+      let fotoStoragePath; // undefined = "não mexe no que já tinha salvo"
+      if (fotoRemovida) fotoStoragePath = null;
+      let avisoFoto = "";
 
-        if (fotoNovaBlob) {
-          elStatus.textContent = "Enviando foto...";
+      if (fotoNovaBlob) {
+        elStatus.textContent = "Enviando foto...";
+        try {
           const id = editandoId || crypto.randomUUID();
-          fotoStoragePath = `relatorios_diarios/${hoje}/${id}.jpg`;
-          const storageRef = ref(storage, fotoStoragePath);
+          const caminho = `relatorios_diarios/${hoje}/${id}.jpg`;
+          const storageRef = ref(storage, caminho);
           await uploadBytes(storageRef, fotoNovaBlob, { contentType: "image/jpeg" });
           fotoUrl = await getDownloadURL(storageRef);
+          fotoStoragePath = caminho;
+        } catch (errFoto) {
+          console.error(errFoto);
+          avisoFoto = ` (mas a foto não subiu: ${explicarErroStorage(errFoto)})`;
+          fotoUrl = fotoRemovida ? null : fotoUrlAtual;
         }
+      }
 
+      try {
         elStatus.textContent = "Salvando...";
 
         if (editandoId) {
           const dados = { tipo, texto, atualizadoEm: serverTimestamp() };
-          dados.fotoUrl = fotoUrl || null;
-          if (fotoStoragePath) dados.fotoStoragePath = fotoStoragePath;
-          else if (fotoRemovida) dados.fotoStoragePath = null;
+          if (fotoStoragePath !== undefined) {
+            dados.fotoUrl = fotoUrl || null;
+            dados.fotoStoragePath = fotoStoragePath;
+          }
           await updateDoc(doc(entradasRef, editandoId), dados);
-          elStatus.textContent = "Edição salva ✅";
+          elStatus.textContent = "Edição salva ✅" + avisoFoto;
         } else {
           await addDoc(entradasRef, {
             hora: horaAgora(),
@@ -508,11 +555,11 @@
             fotoStoragePath: fotoStoragePath || null,
             criadoEm: serverTimestamp()
           });
-          elStatus.textContent = "Adicionado ✅";
+          elStatus.textContent = "Adicionado ✅" + avisoFoto;
         }
 
         limparFormulario();
-        setTimeout(() => (elStatus.textContent = ""), 2000);
+        setTimeout(() => (elStatus.textContent = ""), avisoFoto ? 6000 : 2000);
       } catch (err) {
         elStatus.textContent = "Erro ao salvar: " + err.message;
       } finally {
@@ -521,11 +568,12 @@
     });
 
     // ---- Botão "Enviar resumo no WhatsApp" (manual, sem depender do robô do n8n) ----
-    function montarMensagemWhatsApp(entradas) {
+    function montarMensagemWhatsApp(entradas, dataStr) {
       const ordenadas = entradas.slice().sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
-      const dataFormatada = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+      const dataFormatada = formatarDataExibicao(dataStr);
 
-      let msg = `*Relatório Diário — Emagrecentro*\n_${dataFormatada}_\n\n`;
+      let msg = `*Relatório Diário — Emagrecentro*\n_${dataFormatada}_\n`;
+      msg += `Responsável pelo relatório: ${supervisoraAtual}\n\n`;
       for (const e of ordenadas) {
         const autor = e.supervisora ? ` — ${e.supervisora}` : "";
         msg += `🔸 *${e.hora}* [${e.tipo}]${autor}\n${e.texto}`;
@@ -536,14 +584,77 @@
       return msg;
     }
 
+    function abrirWhatsApp(mensagem) {
+      const url = `https://wa.me/${NUMERO_GERENTE}?text=${encodeURIComponent(mensagem)}`;
+      window.open(url, "_blank");
+    }
+
     document.getElementById("btnWhatsapp").addEventListener("click", () => {
       if (entradasHoje.length === 0) {
         alert("Ainda não tem nenhum lançamento hoje pra mandar.");
         return;
       }
-      const mensagem = montarMensagemWhatsApp(entradasHoje);
-      const url = `https://wa.me/${NUMERO_GERENTE}?text=${encodeURIComponent(mensagem)}`;
-      window.open(url, "_blank");
+      abrirWhatsApp(montarMensagemWhatsApp(entradasHoje, hoje));
+    });
+
+    // ---- Histórico: ver e reenviar relatórios de dias anteriores ----
+    let entradasHistorico = [];
+    let dataHistoricoEscolhida = "";
+
+    document.getElementById("btnVerHistorico").addEventListener("click", async () => {
+      const dataEscolhida = document.getElementById("dataHistorico").value;
+      const elHist = document.getElementById("listaHistorico");
+      const elBtnEnviarHist = document.getElementById("btnWhatsappHistorico");
+
+      if (!dataEscolhida) {
+        alert("Escolhe uma data primeiro.");
+        return;
+      }
+
+      dataHistoricoEscolhida = dataEscolhida;
+      elHist.innerHTML = '<p class="empty">Buscando...</p>';
+      elBtnEnviarHist.style.display = "none";
+
+      try {
+        const refDoDia = collection(db, COLECAO_RAIZ, dataEscolhida, "entradas");
+        const snap = await getDocs(refDoDia);
+        const entradas = [];
+        snap.forEach((d) => entradas.push({ id: d.id, ...d.data() }));
+        entradasHistorico = entradas;
+
+        if (entradas.length === 0) {
+          elHist.innerHTML = '<p class="empty">Nenhum lançamento registrado nesse dia.</p>';
+          return;
+        }
+
+        const ordenadas = entradas.slice().sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+        elHist.innerHTML = ordenadas.map((e) => `
+          <div class="entry">
+            <div class="topo">
+              <div>
+                <span class="hora">${e.hora}</span>
+                <span class="tipo">${e.tipo}</span>
+                ${e.supervisora ? `<span class="sup sup-${slug(e.supervisora)}">${e.supervisora}</span>` : ""}
+              </div>
+            </div>
+            <div>${(e.texto || "").replace(/</g, "&lt;")}</div>
+            ${e.fotoUrl ? `<img src="${e.fotoUrl}" class="foto-thumb" data-fullsrc="${e.fotoUrl}">` : ""}
+          </div>
+        `).join("");
+
+        elHist.querySelectorAll(".foto-thumb").forEach((img) => {
+          img.addEventListener("click", () => window.open(img.dataset.fullsrc, "_blank"));
+        });
+
+        elBtnEnviarHist.style.display = "block";
+      } catch (err) {
+        elHist.innerHTML = `<p class="empty">Erro ao buscar: ${err.message}</p>`;
+      }
+    });
+
+    document.getElementById("btnWhatsappHistorico").addEventListener("click", () => {
+      if (entradasHistorico.length === 0) return;
+      abrirWhatsApp(montarMensagemWhatsApp(entradasHistorico, dataHistoricoEscolhida));
     });
   </script>
 </body>
