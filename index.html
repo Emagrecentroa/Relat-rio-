@@ -229,7 +229,8 @@
   <div class="card">
     <label>Lançamentos de hoje</label>
     <div id="listaEntradas"><p class="empty">Nada registrado ainda hoje.</p></div>
-    <button id="btnWhatsapp" class="secundario" style="margin-top:12px; width:100%;">📤 Enviar resumo no WhatsApp</button>
+    <button id="btnPdfHoje" style="margin-top:12px; width:100%;">📄 Enviar relatório em PDF</button>
+    <button id="btnWhatsapp" class="secundario" style="margin-top:8px; width:100%;">📤 Enviar só o texto no WhatsApp</button>
   </div>
 
   <div class="card">
@@ -237,19 +238,18 @@
     <input type="date" id="dataHistorico">
     <button id="btnVerHistorico" class="secundario" style="width:100%;">Ver relatório desse dia</button>
     <div id="listaHistorico" style="margin-top:12px;"></div>
-    <button id="btnWhatsappHistorico" class="secundario" style="margin-top:12px; width:100%; display:none;">📤 Enviar esse relatório no WhatsApp</button>
+    <button id="btnPdfHistorico" style="margin-top:12px; width:100%; display:none;">📄 Enviar esse relatório em PDF</button>
+    <button id="btnWhatsappHistorico" class="secundario" style="margin-top:8px; width:100%; display:none;">📤 Enviar só o texto no WhatsApp</button>
   </div>
 
-  <footer>Toque no botão acima pra mandar o resumo de hoje pra gerência</footer>
+  <footer>Toque em "Enviar relatório em PDF" pra mandar tudo bonitinho pra gerência</footer>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
     import {
       getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp, getDocs
     } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-    import {
-      getStorage, ref, uploadBytes, getDownloadURL, deleteObject
-    } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
 
     // ⚠️ COLE AQUI a configuração do MESMO projeto Firebase do app de Aniversariantes.
     // Onde achar: console.firebase.google.com > abra o projeto do Aniversariantes >
@@ -266,7 +266,6 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
-    const storage = getStorage(app);
 
     // Cada dia é um documento em "relatorios_diarios/{AAAA-MM-DD}", e cada
     // lançamento é um documento dentro da subcoleção "entradas" desse dia.
@@ -297,17 +296,14 @@
       });
     }
 
-    // Traduz os erros mais comuns do Firebase Storage pra algo que dá pra agir.
-    function explicarErroStorage(err) {
+    // Traduz os erros mais comuns do Firestore pra algo que dá pra agir.
+    function explicarErroSalvar(err) {
       const codigo = err && err.code;
-      if (codigo === "storage/unauthorized") {
-        return "as regras do Storage estão bloqueando o envio — pede pro Leonardo liberar leitura/escrita no Firebase";
+      if (codigo === "permission-denied") {
+        return "as regras do Firestore estão bloqueando — pede pro Leonardo liberar leitura/escrita no Firebase";
       }
-      if (codigo === "storage/unknown" || codigo === "storage/retry-limit-exceeded") {
-        return "o Storage desse projeto pode não estar ativado no Firebase ainda";
-      }
-      if (codigo === "storage/canceled") {
-        return "o envio foi cancelado";
+      if (err && err.message && err.message.toLowerCase().includes("longer than")) {
+        return "a foto ficou grande demais pra salvar — tenta uma foto com menos detalhe ou tira de mais longe";
       }
       return (err && err.message) || "erro desconhecido";
     }
@@ -348,10 +344,10 @@
     aplicarAbaAtiva();
 
     // ---- Estado do formulário (novo lançamento OU edição de um existente) ----
-    let editandoId = null;       // id do documento sendo editado, ou null = criando novo
-    let fotoNovaBlob = null;     // Blob já comprimido, pronto pra subir, se o usuário trocou a foto
-    let fotoUrlAtual = null;     // URL já salva no Firestore (quando editando e não trocou a foto)
-    let fotoRemovida = false;    // true = usuário pediu pra tirar a foto que já existia
+    let editandoId = null;         // id do documento sendo editado, ou null = criando novo
+    let fotoNovaDataUrl = null;    // foto nova já comprimida e pronta, direto como parte do lançamento
+    let fotoUrlAtual = null;       // foto que já estava salva (quando editando e não trocou a foto)
+    let fotoRemovida = false;      // true = usuário pediu pra tirar a foto que já existia
 
     const elTipo = document.getElementById("tipo");
     const elTexto = document.getElementById("texto");
@@ -364,8 +360,10 @@
     const elCard = document.getElementById("cardFormulario");
     const elStatus = document.getElementById("status");
 
-    // Comprime a foto no navegador antes de subir (bem mais rápido no 4G da clínica)
-    function comprimirImagem(file, larguraMax = 1280, qualidade = 0.72) {
+    // A foto não sobe pra nenhum servidor separado — ela é comprimida aqui no
+    // navegador e guardada junto com o próprio lançamento (como um anexo de
+    // verdade). Isso evita depender do Storage do Firebase, que dava problema.
+    function comprimirImagem(file, larguraMax, qualidade) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         const url = URL.createObjectURL(file);
@@ -384,14 +382,34 @@
       });
     }
 
+    function blobParaDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const leitor = new FileReader();
+        leitor.onload = () => resolve(leitor.result);
+        leitor.onerror = reject;
+        leitor.readAsDataURL(blob);
+      });
+    }
+
+    // Tenta um tamanho razoável primeiro; se ainda ficar pesado, aperta mais
+    // (cada lançamento no Firestore tem um limite de ~1MB, então a foto
+    // precisa caber com folga).
+    async function prepararFotoParaAnexar(file) {
+      let blob = await comprimirImagem(file, 900, 0.55);
+      if (blob.size > 500000) blob = await comprimirImagem(file, 650, 0.4);
+      if (blob.size > 500000) blob = await comprimirImagem(file, 450, 0.3);
+      return blob;
+    }
+
     elFoto.addEventListener("change", async () => {
       const file = elFoto.files[0];
       if (!file) return;
       elStatus.textContent = "Preparando foto...";
       try {
-        fotoNovaBlob = await comprimirImagem(file);
+        const blob = await prepararFotoParaAnexar(file);
+        fotoNovaDataUrl = await blobParaDataUrl(blob);
         fotoRemovida = false;
-        elPreviewImg.src = URL.createObjectURL(fotoNovaBlob);
+        elPreviewImg.src = fotoNovaDataUrl;
         elPreview.classList.add("mostrar");
         elStatus.textContent = "";
       } catch (err) {
@@ -400,7 +418,7 @@
     });
 
     document.getElementById("btnRemoverFoto").addEventListener("click", () => {
-      fotoNovaBlob = null;
+      fotoNovaDataUrl = null;
       fotoRemovida = true;
       elFoto.value = "";
       elPreview.classList.remove("mostrar");
@@ -408,7 +426,7 @@
 
     function limparFormulario() {
       editandoId = null;
-      fotoNovaBlob = null;
+      fotoNovaDataUrl = null;
       fotoUrlAtual = null;
       fotoRemovida = false;
       elTipo.value = "Paciente";
@@ -423,7 +441,7 @@
 
     function iniciarEdicao(entrada) {
       editandoId = entrada.id;
-      fotoNovaBlob = null;
+      fotoNovaDataUrl = null;
       fotoUrlAtual = entrada.fotoUrl || null;
       fotoRemovida = false;
       elTipo.value = entrada.tipo;
@@ -488,9 +506,6 @@
           if (!alvo) return;
           if (!confirm("Remover este lançamento?")) return;
           await deleteDoc(doc(entradasRef, alvo.id));
-          if (alvo.fotoStoragePath) {
-            deleteObject(ref(storage, alvo.fotoStoragePath)).catch(() => {});
-          }
           if (editandoId === alvo.id) limparFormulario();
         });
       });
@@ -511,57 +526,33 @@
       elBtnAdicionar.disabled = true;
       elStatus.textContent = "Salvando...";
 
-      // A foto sobe separado do resto: se ela falhar, o texto do lançamento
-      // é salvo do mesmo jeito, só avisando que a foto não entrou.
-      let fotoUrl = fotoRemovida ? null : fotoUrlAtual;
-      let fotoStoragePath; // undefined = "não mexe no que já tinha salvo"
-      if (fotoRemovida) fotoStoragePath = null;
-      let avisoFoto = "";
-
-      if (fotoNovaBlob) {
-        elStatus.textContent = "Enviando foto...";
-        try {
-          const id = editandoId || crypto.randomUUID();
-          const caminho = `relatorios_diarios/${hoje}/${id}.jpg`;
-          const storageRef = ref(storage, caminho);
-          await uploadBytes(storageRef, fotoNovaBlob, { contentType: "image/jpeg" });
-          fotoUrl = await getDownloadURL(storageRef);
-          fotoStoragePath = caminho;
-        } catch (errFoto) {
-          console.error(errFoto);
-          avisoFoto = ` (mas a foto não subiu: ${explicarErroStorage(errFoto)})`;
-          fotoUrl = fotoRemovida ? null : fotoUrlAtual;
-        }
-      }
+      // A foto já está pronta em memória (comprimida na hora que foi
+      // escolhida), então salvar é uma escrita só — sem depender de upload.
+      const fotoUrl = fotoRemovida ? null : (fotoNovaDataUrl || fotoUrlAtual || null);
 
       try {
-        elStatus.textContent = "Salvando...";
-
         if (editandoId) {
-          const dados = { tipo, texto, atualizadoEm: serverTimestamp() };
-          if (fotoStoragePath !== undefined) {
-            dados.fotoUrl = fotoUrl || null;
-            dados.fotoStoragePath = fotoStoragePath;
-          }
-          await updateDoc(doc(entradasRef, editandoId), dados);
-          elStatus.textContent = "Edição salva ✅" + avisoFoto;
+          await updateDoc(doc(entradasRef, editandoId), {
+            tipo, texto, fotoUrl, atualizadoEm: serverTimestamp()
+          });
+          elStatus.textContent = "Edição salva ✅";
         } else {
           await addDoc(entradasRef, {
             hora: horaAgora(),
             tipo,
             texto,
             supervisora: supervisoraAtual,
-            fotoUrl: fotoUrl || null,
-            fotoStoragePath: fotoStoragePath || null,
+            fotoUrl,
             criadoEm: serverTimestamp()
           });
-          elStatus.textContent = "Adicionado ✅" + avisoFoto;
+          elStatus.textContent = "Adicionado ✅";
         }
 
         limparFormulario();
-        setTimeout(() => (elStatus.textContent = ""), avisoFoto ? 6000 : 2000);
+        setTimeout(() => (elStatus.textContent = ""), 2000);
       } catch (err) {
-        elStatus.textContent = "Erro ao salvar: " + err.message;
+        console.error(err);
+        elStatus.textContent = "Erro ao salvar: " + explicarErroSalvar(err);
       } finally {
         elBtnAdicionar.disabled = false;
       }
@@ -577,7 +568,7 @@
       for (const e of ordenadas) {
         const autor = e.supervisora ? ` — ${e.supervisora}` : "";
         msg += `🔸 *${e.hora}* [${e.tipo}]${autor}\n${e.texto}`;
-        if (e.fotoUrl) msg += `\n📷 ${e.fotoUrl}`;
+        if (e.fotoUrl) msg += `\n📷 (com foto — ver no relatório em PDF)`;
         msg += `\n\n`;
       }
       msg += `Total de registros: ${ordenadas.length}`;
@@ -597,6 +588,130 @@
       abrirWhatsApp(montarMensagemWhatsApp(entradasHoje, hoje));
     });
 
+    // ---- PDF do relatório (com as fotos embutidas, bonitinho pra gerência) ----
+    function medirImagem(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ largura: img.naturalWidth, altura: img.naturalHeight });
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+    }
+
+    async function gerarPdfBlob(entradas, dataStr) {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      const margem = 15;
+      const larguraUtil = 210 - margem * 2;
+      let y;
+
+      pdf.setFillColor(201, 143, 147);
+      pdf.rect(0, 0, 210, 26, "F");
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(16);
+      pdf.text("Relatório Diário — Emagrecentro", margem, 16);
+      y = 36;
+
+      pdf.setTextColor(58, 44, 45);
+      pdf.setFontSize(11);
+      pdf.text(formatarDataExibicao(dataStr), margem, y);
+      y += 6;
+      pdf.text(`Responsável pelo relatório: ${supervisoraAtual}`, margem, y);
+      y += 10;
+
+      const ordenadas = entradas.slice().sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+
+      for (const e of ordenadas) {
+        if (y > 265) { pdf.addPage(); y = margem; }
+
+        pdf.setFontSize(11);
+        pdf.setFont(undefined, "bold");
+        const autor = e.supervisora ? ` — ${e.supervisora}` : "";
+        pdf.text(`${e.hora}  [${e.tipo}]${autor}`, margem, y);
+        y += 6;
+
+        pdf.setFont(undefined, "normal");
+        pdf.setFontSize(10);
+        const linhas = pdf.splitTextToSize(e.texto || "", larguraUtil);
+        pdf.text(linhas, margem, y);
+        y += linhas.length * 5 + 2;
+
+        if (e.fotoUrl) {
+          try {
+            const dims = await medirImagem(e.fotoUrl);
+            const larguraImg = 70;
+            const alturaImg = larguraImg * (dims.altura / dims.largura);
+            if (y + alturaImg > 280) { pdf.addPage(); y = margem; }
+            pdf.addImage(e.fotoUrl, "JPEG", margem, y, larguraImg, alturaImg);
+            y += alturaImg + 6;
+          } catch (errImg) {
+            console.error(errImg);
+          }
+        }
+
+        y += 3;
+        pdf.setDrawColor(232, 180, 184);
+        pdf.line(margem, y, 210 - margem, y);
+        y += 7;
+      }
+
+      pdf.setFontSize(9);
+      pdf.setTextColor(150, 120, 120);
+      pdf.text(`Total de registros: ${ordenadas.length}`, margem, y + 2);
+
+      return pdf.output("blob");
+    }
+
+    async function enviarPdf(entradas, dataStr, botao) {
+      if (entradas.length === 0) {
+        alert("Não tem nenhum lançamento nesse relatório ainda.");
+        return;
+      }
+      const textoOriginal = botao.textContent;
+      botao.disabled = true;
+      botao.textContent = "Gerando PDF...";
+      try {
+        const nomeArquivo = `relatorio-emagrecentro-${dataStr}.pdf`;
+        const blob = await gerarPdfBlob(entradas, dataStr);
+        const arquivo = new File([blob], nomeArquivo, { type: "application/pdf" });
+
+        if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+          try {
+            await navigator.share({
+              files: [arquivo],
+              title: "Relatório Diário — Emagrecentro",
+              text: `Relatório de ${formatarDataExibicao(dataStr)}`
+            });
+            return;
+          } catch (errShare) {
+            if (errShare.name === "AbortError") return; // cancelou o compartilhamento, sem problema
+            console.error(errShare);
+            // se o compartilhamento falhar por outro motivo, cai pro download abaixo
+          }
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = nomeArquivo;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        alert("PDF baixado! Agora é só abrir o WhatsApp da gerente e anexar o arquivo.");
+      } catch (err) {
+        console.error(err);
+        alert("Não consegui gerar o PDF: " + (err.message || "erro desconhecido"));
+      } finally {
+        botao.disabled = false;
+        botao.textContent = textoOriginal;
+      }
+    }
+
+    document.getElementById("btnPdfHoje").addEventListener("click", (ev) => {
+      enviarPdf(entradasHoje, hoje, ev.currentTarget);
+    });
+
     // ---- Histórico: ver e reenviar relatórios de dias anteriores ----
     let entradasHistorico = [];
     let dataHistoricoEscolhida = "";
@@ -605,6 +720,7 @@
       const dataEscolhida = document.getElementById("dataHistorico").value;
       const elHist = document.getElementById("listaHistorico");
       const elBtnEnviarHist = document.getElementById("btnWhatsappHistorico");
+      const elBtnPdfHist = document.getElementById("btnPdfHistorico");
 
       if (!dataEscolhida) {
         alert("Escolhe uma data primeiro.");
@@ -614,6 +730,7 @@
       dataHistoricoEscolhida = dataEscolhida;
       elHist.innerHTML = '<p class="empty">Buscando...</p>';
       elBtnEnviarHist.style.display = "none";
+      elBtnPdfHist.style.display = "none";
 
       try {
         const refDoDia = collection(db, COLECAO_RAIZ, dataEscolhida, "entradas");
@@ -647,6 +764,7 @@
         });
 
         elBtnEnviarHist.style.display = "block";
+        elBtnPdfHist.style.display = "block";
       } catch (err) {
         elHist.innerHTML = `<p class="empty">Erro ao buscar: ${err.message}</p>`;
       }
@@ -655,6 +773,10 @@
     document.getElementById("btnWhatsappHistorico").addEventListener("click", () => {
       if (entradasHistorico.length === 0) return;
       abrirWhatsApp(montarMensagemWhatsApp(entradasHistorico, dataHistoricoEscolhida));
+    });
+
+    document.getElementById("btnPdfHistorico").addEventListener("click", (ev) => {
+      enviarPdf(entradasHistorico, dataHistoricoEscolhida, ev.currentTarget);
     });
   </script>
 </body>
